@@ -1,0 +1,271 @@
+--- 
+title: "Practical Machine Learning - Course Project" 
+author: "Francesco Aldo Tucci" 
+date: "4/25/2021" 
+output: 
+  html_document: 
+    keep_md: yes 
+  pdf_document: default 
+--- 
+## Table of Contents^[Please note that blank space and division in sections were used to make the document more readable; overall, the page lengths requirements are (more or less) met!] 
+1. Overview 
+2. Data Processing 
+3. Analysis 
+4. R Code 
+    4.1 Miscellanea 
+    4.2 Analysis Part 1 
+    4.3 Analysis Part 2 (PCA) 
+    4.4 Confusion Matrices 
+
+## 1. Overview 
+
+The data for this assignment comes from the Human Activity Recognition project^[Velloso, E., Bulling, A., Gellersen, H., Ugulino, W. & Fuks, H. (2013), _Qualitative Activity Recognition of Weight Lifting Exercises_, Proceedings of 4th Augmented Human (AH) International Conference in cooperation with ACM SIGCHI (Augmented Human'13), Stuttgart, Germany: ACM SIGCHI 2013. See   http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201#ixzz4T79Uh6w7 for further details.]. It offers a huge array of measurements^[A grand total of 153 different variables, as recorded by the sensors, excluding 7 variables which only record metadata.] related to physical activity and movements performed by 6 subjects as registered by devices such as _Jawbone Up_, _Nike FuelBand_, and _Fitbit_, classifying the resulting _quality_ of the exercise (how well it was performed compared to theoretical execution) into 5 distinct categories^[For clarity and to be pedantic, factor level A corresponds to doing the exercise exactly as intended; B is for throwing the elbows to the front; C records _lifting_ the dumbbell only halfway; D records _lowering_ the dumbbell halfway; and finally E is for the case "throwing the hips to the front".], recorded by the levels of the outcome factor variable _classe_. 
+
+Using the data provided, I build a model that allows reliable prediction of the "classe" outcome, explaining model choice based on measured accuracy of the trained model, using cross-validation to select the model parameters tuning and an independent hold-out data set for final validation before choice. I compute the out-of-sample error rate and finally apply the selected model to the 20 observations in the "pml-testing" data set to answer the assignment quiz by predicting the classe outcome. 
+
+## 2. Data Processing 
+
+Data are correctly downloaded, read & loaded into RStudio. I get rid of metadata (columns 1 to 7 included) since they are uninformative^[Well, they might be informative, because e.g. subject X might be on average better at performing the exercises than subject Y, and we have the name of the subject available, but we want our prediction to rely only on the measurements recorded by the sensors in the devices.]. Missing values pester a relatively large subset of the recorded variables; since there are a huge number of variables with lots of NAs (more than 90%), while the other variables have no missing values at all, I employ the simple^[Brutish, yet perfectly justifiable in this type of situation, when imputing missing values is either impossible or nonsensical.] approach of dropping variables with more than 50% of missing values^[To clarify further, the variables thus selected are the same for all thresholds from 50% (sometimes used by practitioners) to 90% and beyond (I believe it's mandatory at that point!).]. 
+
+Further inspection of the data shows that there are some highly correlated variables. While some methods are (more) robust to potential multicollinearity, I use two different approaches, which are directly incorporated into the analysis and thus are discussed below. 
+
+## 3. Analysis 
+
+For all models, 3-fold Cross-Validation is used. Instead of a full tuning grid, a tuneLength input (set equal to 5) is specified for number of combinations for parameters selection. Since the steps in the analysis (see code) try to follow as close as possible those outlined in the semi-automated process proposed by Kuhn (2008)^[Kuhn, M. (2008), _Building predictive models in R using the caret package_, Journal of Statistical Software, 28(5), 1-26.], the 'caret' package is used extensively, especially for training the models through the 'train' function. 
+
+The first model trained is a decision tree, fitted by applying the 'rpart' method of the 'train' function. Its performance is limited by its inherent simplicity to a very modest 0.5524 accuracy. A second, natural candidate is then random forest. 
+
+As summarized in a nice yet disparaging table by Mentor Leonard Greski^[Aka Len Igreski. See https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-requiredModelAccuracy.md for reference.] in the Discussion section of the Course, to get all of the 20 predictions in the hold-out "quiz" data set right with at least 90% probability, one needs at least 0.995 accuracy, even accounting for Šidák correction for multiple tests^[See http://bit.ly/2DuPwlq (reference cited in the above).]. 
+
+Since the outcome variable is categorical, I use the proportion of classes predicted incorrectly (one minus accuracy of the model in predicting the test data) as the out-of-sample^[As seen during the course, out-of-sample error, or "generalization" error, is more appropriate than in-sample error measures, due to overfitting.] error measure for model choice. 
+
+Model 2, Random forest, is thus already a winner, with 0.9963 accuracy (.9943, .9977 95% Confidence Interval), corresponding to a meager 0.37% classes predicted incorrectly^[Again, since _repetita iuvant_, this refers to the test data, _not_ the data used to train aka estimate the model!]. 
+
+As an additional check to avoid overfitting and/or pernicious multicollinearity, model 3 consists of training a random forest model on the first 30 principal components (which together explain more than 97.5% of the variance in the features) of the PCA^[PCA is _Principal Component Analysis_, ça va sans dire.]. The accuracy on the test set is slightly lower^[As expected I would say, since by using PCA one "collapses" the information by using only part of it (a part big enough to explain most of the features' variance, as said, but still).] (0.9798). 
+
+Thus, model 2 is the choice for answering the quiz. Results in terms of the _roaring twenties_, ehm, predictions, are reported after the code for the model. Confusion matrices are reported in the section named as such. 
+
+\newpage 
+
+## 4. R Code 
+
+### 4.1 Miscellanea 
+``` {r library calls, message=FALSE, echo=TRUE} 
+library(readr) 
+library(dplyr) 
+library(caret) 
+library(corrplot) 
+library(rattle) 
+library(RColorBrewer) 
+library(randomForest) 
+library(doMC) 
+``` 
+
+### Load & Read Datasets 
+``` {r load and read data, cache=TRUE, echo=TRUE} 
+# Data downloaded in the same folder as the .Rproj this .Rmd is in 
+# urlTrain<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv" 
+# urlTest<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv" 
+pml_training <- read.csv("pml-training.csv", na.strings = c('#DIV/0', '', 'NA')) 
+pml_training <- as.data.frame(pml_training) # 19,622 x 160 data frame 
+pml_testing  <- read.csv("pml-testing.csv", na.strings = c('#DIV/0', '', 'NA')) 
+pml_testing  <- as.data.frame(pml_testing)  # 20 x 160 data frame 
+``` 
+
+### "Quiz" data (for final prediction) & Training data 
+``` {r quiz and train data, cache=TRUE, echo=TRUE} 
+quizData <- pml_testing[, -c(1:7)] 
+quizData <- quizData[, colMeans(is.na(quizData)) < 0.5] # 20 x 53 
+training <- pml_training[, -c(1:7)] 
+training <- training[, colMeans(is.na(training)) < 0.5] # 19,622 x 53 
+``` 
+
+### Correlation matrix & Corrplot 
+``` {r correlation matrix, cache=TRUE, echo=TRUE} 
+corr.mat  <- cor(training[, -53]) # See plot as Fig. 1 
+``` 
+
+``` {r drop high correlation, cache=TRUE, echo=FALSE} 
+#### Restrict multicollinearity by dropping highly correlated variables 
+high.Corr     <- findCorrelation(corr.mat, 0.9) 
+training.nohc <- training[, -high.Corr] # 19,622 x 46 
+quizData.nohc <- quizData[, -high.Corr] # 20 x 46 
+# NOTE: No need to further drop near-zero variance (NZV) variables, since 
+# nzv <- nearZeroVar(training.nohc) 
+# returns an empty (!) integer vector 
+``` 
+
+### Split training data btw train (CV will also be applied on them) & test data 
+``` {r createDataPartition, cache=TRUE, echo=TRUE} 
+set.seed(42) 
+inTrain <- createDataPartition(training.nohc$classe, p = 0.7, list = FALSE) 
+trainData <- training.nohc[ inTrain, ] # 13,737 x 46 
+testData  <- training.nohc[-inTrain, ] # 5885 x 46 
+``` 
+
+### Setup for 3-fold Cross-Validation 
+``` {r setup 3-fold CV, cache=TRUE, echo=TRUE} 
+CV.k3 <- trainControl(method = "cv", number = 3, verboseIter = FALSE) 
+``` 
+
+### 4.2 Analysis Part 1 
+
+### Model 1 - Decision Tree for Classification  
+``` {r decision trees, cache=TRUE, echo=TRUE} 
+set.seed(42) 
+treeFit.k3 <- train(classe ~ ., data = trainData, method = "rpart", 
+                    trControl = CV.k3, tuneLength = 5) 
+pred.tr.k3 <- predict(treeFit.k3, newdata = testData) 
+p1.tr.k3   <- fancyRpartPlot(model = treeFit.k3$finalModel, 
+                             sub = "Decision Tree plot") 
+cm.tr.k3   <- confusionMatrix(pred.tr.k3, factor(testData$classe)) 
+p2.tr.k3   <- plot(cm.tr.k3$table, col = cm.tr.k3$byClass, 
+                   main = paste("Decision Tree - Accuracy =", 
+                                round(cm.tr.k3$overall["Accuracy"], 4))) 
+# Low Accuracy: .55 ; NoInfoRate: .28 ; Kappa: .44 
+``` 
+
+``` {r predictions model 1, echo=FALSE} 
+answers.tr <- predict(treeFit.k3, quizData.nohc) 
+# [1] D A A C C C D C A A C C C A C C C A A C 
+# Levels: A B C D E 
+``` 
+
+### Model 2 - Random Forest 
+``` {r random forest, cache=TRUE, echo=TRUE} 
+registerDoMC(cores = 4) 
+set.seed(42) 
+rf.Fit <- train(classe ~ ., data = trainData, method = "rf", trControl = CV.k3, 
+                tuneLength = 5)  
+pred.rf.Fit <- predict(rf.Fit, newdata = testData) 
+cm.rf.Fit   <- confusionMatrix(pred.rf.Fit, factor(testData$classe)) 
+# Accuracy .996 ; Kappa .995 
+# Good enough (maybe too much? overfitting?) 
+# Will do rf on PCA-processed data as well 
+``` 
+
+### Predictions on hold-out data (answers to the quiz) 
+``` {r predictions model 2, echo=TRUE} 
+answers.rf <- predict(rf.Fit, quizData.nohc) 
+answers.rf 
+``` 
+
+``` {r QUIZ ANSWERS, echo=FALSE} 
+# [1] B A B A A E D B A A B C B A E E A B B B 
+# Levels: A B C D E 
+``` 
+
+### 4.3 Analysis - Part 2 
+
+### Using PCA to reduce redundant/collinear information 
+``` {r PCA, cache=TRUE, echo=TRUE} 
+# Start back from 'training' data 
+trainingPCA.base  <- prcomp(training[, -53], scale = TRUE) 
+std.PCA <- trainingPCA.base$sdev 
+var.PCA <- std.PCA^2 
+propVar.PCA <- var.PCA / sum(var.PCA) 
+trainingPCA.caret <- preProcess(training[, -53], method = "pca", thresh = 0.9, 
+                             verbose = FALSE) 
+``` 
+
+### Split PCA data for training/testing 
+``` {r train.PCA, cache=TRUE, echo=TRUE} 
+training.PCA <- data.frame(classe = training$classe, trainingPCA.base$x) 
+# From the cumulative variance explained plot we see that the first 30 
+# Principal Components explain more than 97.5% of the variance in the data 
+# (way less than 46 or 53 variables!): sum(propVar.PCA[1:30]) 
+training.PCA <- training.PCA[, 1:30] # Select first 30 Principal Components only 
+set.seed(42) 
+inTrainPCA <- createDataPartition(training.PCA$classe, p = 0.7, list = FALSE) 
+trainData.PCA <- training.PCA[ inTrainPCA, ] # 13,737 x 30 
+testData.PCA  <- training.PCA[-inTrainPCA, ] # 5,885 x 30 
+``` 
+
+### Model 3 - Random Forest on PCA data 
+``` {r random forest PCA, cache=TRUE, echo=TRUE} 
+registerDoMC(cores = 4) 
+set.seed(42) 
+rf.PCA <- train(classe ~ ., data = trainData.PCA, method = "rf", 
+                trControl = CV.k3, tuneLength = 5) 
+pred.rf.PCA <- predict(rf.PCA, newdata = testData.PCA) 
+cm.rf.PCA   <- confusionMatrix(pred.rf.PCA, factor(testData.PCA$classe)) 
+``` 
+
+``` {r predictions model 3, echo=FALSE} 
+# quizData.PCA.base <- prcomp(quizData, scale = TRUE) 
+# quizData.PCA <- quizData.PCA.base$x 
+# quizData.PCA <- quizData.PCA[, 1:30] 
+### Error in quizData.PCA[, 1:30] : indice fuori limite 
+quizData.PCA <- predict(trainingPCA.base, newdata = quizData) 
+quizData.PCA <- quizData.PCA[, 1:30] 
+answers.PCA  <- predict(rf.PCA, quizData.PCA) 
+# [1] B A A A A E D B A A B C B A E E A B B B
+# Levels: A B C D E
+``` 
+
+\newpage 
+
+## 4.4 Confusion Matrices 
+
+### Confusion matrix Model 1 
+``` {r} 
+cm.tr.k3 
+``` 
+\newpage 
+### Confusion matrix Model 2 
+``` {r} 
+cm.rf.Fit 
+``` 
+\newpage 
+### Confusion matrix Model 3 
+``` {r} 
+cm.rf.PCA 
+``` 
+
+\newpage 
+
+## 5. Figures 
+
+### Figure 1 - Correlation Plot 
+``` {r Figure 1 corrplot output, echo=TRUE}  
+corr.plot <- corrplot(corr.mat, order = "FPC", method = "color",  type = "upper", 
+                      col = brewer.pal(n = 11, name = "RdYlGn"), tl.cex = 0.8, 
+                      tl.col = "black") # variables ordered by FPC (PCA)  
+``` 
+
+\newpage 
+### Figure 2 - Cumulative Variance Explained by First Components 
+``` {r Figure 2 cumvar PCA plot, cache=TRUE, echo=TRUE} 
+# Again, trying to be colorblindness-friendly, we select these colors  
+# (someone should write a proper manual & package for this!) 
+plot.PCA <- plot(cumsum(propVar.PCA), 
+                 xlab = "Principal Component", 
+                 ylab = "Cumulative Proportion of Variance Explained", 
+                 pch = 19, col = "#56B4E9" , type = "b") 
+plot.PCA 
+abline(h = 0.975, v = 30, col = "#E69F00") 
+``` 
+
+\newpage 
+### Figure 3 - Accuracy of Model 1 (Decision Tree) as function of Complexity 
+``` {r Figure 3, out.width="75%", cache=TRUE, echo=TRUE} 
+plot(treeFit.k3) 
+``` 
+
+### Figure 4 - Accuracy of Model 2 (Random Forest) as function of n° of features 
+``` {r Figure 4, out.width="75%", cache=TRUE, echo=TRUE} 
+plot(rf.Fit) 
+``` 
+
+\newpage 
+
+### Figure 5 - Variable Importance in the trained Random Forest model 
+``` {r Figure 5, cache=TRUE, echo=TRUE} 
+imp.rf <- varImp(rf.Fit, scale = FALSE) 
+plot(imp.rf) 
+``` 
+
+
+
+
+
